@@ -1,4 +1,4 @@
-# M5GriperTester
+# M5DamiaoTester
 
 M5Stack CoreS3 Lite で DAMIAO **DM-J4340-2EC** モーターを動かすためのテストツールです。
 Chain Encoder で位置を微調整し、タッチ画面の 3 つのプリセットボタンで登録位置へ移動できます。
