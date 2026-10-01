@@ -17,7 +17,8 @@ static Chain chain;
 static M5Canvas canvas(&M5.Display);
 
 static CtrlState state = CtrlState::Off;
-static String errorMsg;  // 空ならエラーなし
+static String errorMsg;     // 空ならエラーなし
+static String errorDetail;  // CAN バスの診断情報 (接続失敗時)
 
 static float targetPos = 0;
 static float presets[3] = {0, 0, 0};
@@ -135,6 +136,9 @@ static void drawScreen()
         canvas.setTextColor(TFT_YELLOW);
         snprintf(buf, sizeof(buf), "記憶 %.1f° → 登録先 1/2/3 を押す", radToDeg(memoPos));
         canvas.drawString(buf, 12, 160);
+    } else if (!running && !errorDetail.isEmpty()) {
+        canvas.setTextColor(TFT_ORANGE);
+        canvas.drawString(errorDetail.c_str(), 12, 160);
     } else if (running && motor.status() == 1) {
         canvas.setTextColor(TFT_DARKGREY);
         snprintf(buf, sizeof(buf), "T:%.2fNm  MOS:%d℃  Rotor:%d℃", motor.torque(), motor.tempMos(), motor.tempRotor());
@@ -233,9 +237,10 @@ static void failConnect(const char *msg)
 
 static void startControl()
 {
-    errorMsg  = "";
-    memoArmed = false;
-    state     = CtrlState::Connecting;
+    errorMsg    = "";
+    errorDetail = "";
+    memoArmed   = false;
+    state       = CtrlState::Connecting;
     drawScreen();
 
     if (!motor.beginBus(CAN_TX_PIN, CAN_RX_PIN)) {
@@ -245,10 +250,10 @@ static void startControl()
 
     // --- モーター探索: ID を走査して PMAX レジスタに応答したものを採用 ---
     float pmax = 0;
-    uint32_t start = millis();
+    uint32_t deadline = millis() + CONNECT_TIMEOUT_MS;
     bool found = false;
-    while (millis() - start < CONNECT_TIMEOUT_MS) {
-        if (motor.scan(DM_SCAN_ID_MIN, DM_SCAN_ID_MAX, &pmax)) {
+    while ((int32_t)(millis() - deadline) < 0) {
+        if (motor.scan(DM_SCAN_ID_MIN, DM_SCAN_ID_MAX, &pmax, deadline)) {
             found = true;
             break;
         }
@@ -259,6 +264,8 @@ static void startControl()
         }
     }
     if (!found) {
+        errorDetail = motor.diagText();
+        motor.printDiag();
         failConnect("モーターが見つかりません");
         return;
     }

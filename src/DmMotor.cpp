@@ -28,6 +28,7 @@ bool DmMotor::beginBus(int txPin, int rxPin)
         return false;
     }
     started_  = true;
+    rxCount_  = 0;
     status_   = 0;
     lastFbMs_ = 0;
     Serial.println("[CAN] started (1Mbps)");
@@ -153,26 +154,94 @@ bool DmMotor::checkScanReply(const twai_message_t &msg, float *pmax)
     return true;
 }
 
-bool DmMotor::scan(uint16_t minId, uint16_t maxId, float *pmax, uint32_t replyWaitMs)
+bool DmMotor::scan(uint16_t minId, uint16_t maxId, float *pmax, uint32_t deadlineMs)
 {
     if (!started_) return false;
     twai_message_t msg;
     while (twai_receive(&msg, 0) == ESP_OK) {}  // 古い受信を捨てる
 
+    // 受信したフレームを確認する。診断用に、応答以外のフレームも最初の数個をログに出す
+    auto check = [&](const twai_message_t &m) {
+        rxCount_++;
+        if (rxCount_ <= 8) {
+            Serial.printf("[CAN] rx id=0x%03X %s dlc=%d :", m.identifier, m.extd ? "EXT" : "STD", m.data_length_code);
+            for (int i = 0; i < m.data_length_code && i < 8; i++) Serial.printf(" %02X", m.data[i]);
+            Serial.println();
+        }
+        return checkScanReply(m, pmax);
+    };
+
     // 全 ID へ読み出し要求を連続送信し、途中で応答が来たら即終了
+    int sendFails = 0;
     for (uint32_t id = minId; id <= maxId; id++) {
+        if ((int32_t)(millis() - deadlineMs) >= 0) return false;
         uint8_t d[8] = {(uint8_t)(id & 0xFF), (uint8_t)(id >> 8), 0x33, RID_PMAX, 0, 0, 0, 0};
-        send(0x7FF, d);
+        if (send(0x7FF, d)) {
+            sendFails = 0;
+        } else if (++sendFails >= 10) {
+            // 送信できない = ACK が返っていない (配線・ピン・ボーレート・終端を確認)
+            Serial.println("[CAN] transmit failed repeatedly (no ACK?)");
+            printDiag();
+            delay(50);
+            return false;
+        }
         while (twai_receive(&msg, 0) == ESP_OK) {
-            if (checkScanReply(msg, pmax)) return true;
+            if (check(msg)) return true;
         }
     }
     // 最後の要求への応答待ち
     uint32_t start = millis();
-    while (millis() - start < replyWaitMs) {
-        if (twai_receive(&msg, pdMS_TO_TICKS(2)) == ESP_OK && checkScanReply(msg, pmax)) return true;
+    while (millis() - start < 50) {
+        if (twai_receive(&msg, pdMS_TO_TICKS(2)) == ESP_OK && check(msg)) return true;
     }
+    Serial.println("[CAN] no register reply, probing with disable command");
+
+    // レジスタ読み出しに応答しない場合の予備: 各 ID に「無効化」を送り、フィードバックを待つ。
+    // 0x100 以上は他 ID のモード別指令と重なるので送らない。無効化なのでモーターは動かない。
+    uint16_t probeMax = maxId < 0xFF ? maxId : 0xFF;
+    for (uint32_t id = minId; id <= probeMax; id++) {
+        if ((int32_t)(millis() - deadlineMs) >= 0) break;
+        uint8_t d[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFD};
+        if (!send(id, d)) continue;
+        uint32_t t0 = millis();
+        while (millis() - t0 < 3) {
+            if (twai_receive(&msg, pdMS_TO_TICKS(1)) != ESP_OK) continue;
+            if (check(msg)) return true;
+            if (!msg.extd && msg.data_length_code == 8 && (msg.data[0] & 0x0F) == (id & 0x0F)) {
+                canId_    = id;
+                masterId_ = msg.identifier;
+                *pmax     = 0;  // 不明 (呼び出し側で既定値を使う)
+                Serial.printf("[CAN] feedback reply from id=0x%03X\n", id);
+                return true;
+            }
+        }
+    }
+    printDiag();
     return false;
+}
+
+String DmMotor::diagText()
+{
+    twai_status_info_t info = {};
+    if (!started_ || twai_get_status_info(&info) != ESP_OK) return "CAN停止中";
+    static const char *st[] = {"STOP", "RUN", "BUSOFF", "RECOV"};
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s TEC%lu REC%lu BE%lu RX%lu", st[info.state & 3],
+             (unsigned long)info.tx_error_counter, (unsigned long)info.rx_error_counter,
+             (unsigned long)info.bus_error_count, (unsigned long)rxCount_);
+    return buf;
+}
+
+void DmMotor::printDiag()
+{
+    twai_status_info_t info = {};
+    if (!started_ || twai_get_status_info(&info) != ESP_OK) return;
+    Serial.printf("[CAN] state=%d TEC=%lu REC=%lu bus_err=%lu tx_failed=%lu arb_lost=%lu rx_missed=%lu "
+                  "tx_queued=%lu rx_total=%lu\n",
+                  info.state, (unsigned long)info.tx_error_counter, (unsigned long)info.rx_error_counter,
+                  (unsigned long)info.bus_error_count, (unsigned long)info.tx_failed_count,
+                  (unsigned long)info.arb_lost_count, (unsigned long)info.rx_missed_count,
+                  (unsigned long)info.msgs_to_tx, (unsigned long)rxCount_);
 }
 
 bool DmMotor::readRegister(uint8_t rid, uint8_t out[4], uint32_t timeoutMs)

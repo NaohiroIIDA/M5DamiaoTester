@@ -23,7 +23,12 @@ public:
 
     // minId〜maxId の全 ID に PMAX 読み出しを送り、最初に応答したモーターの ID を採用する。
     // 見つかれば canId() / masterId() が更新され、pmax に PMAX が入る。
-    bool scan(uint16_t minId, uint16_t maxId, float *pmax, uint32_t replyWaitMs = 50);
+    // deadlineMs (millis() の値) を過ぎたら途中でも打ち切る。
+    bool scan(uint16_t minId, uint16_t maxId, float *pmax, uint32_t deadlineMs);
+
+    // バスの状態 (診断用)
+    String diagText();
+    void printDiag();
     uint16_t canId() const { return canId_; }
     uint16_t masterId() const { return masterId_; }  // 応答フレームの CAN ID
 
@@ -76,4 +81,5 @@ private:
     float pos_ = 0, vel_ = 0, tor_ = 0;
     uint8_t status_ = 0, tMos_ = 0, tRotor_ = 0;
     uint32_t lastFbMs_ = 0;
+    uint32_t rxCount_  = 0;  // 走査中に受信したフレーム数
 };
