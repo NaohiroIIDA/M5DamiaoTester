@@ -13,6 +13,8 @@ Chain Encoder で位置を微調整し、タッチ画面の 3 つのプリセッ
 > - OpenArm などで使っていたモーターは、**CAN FD (データ部 5Mbps) に設定されている**ことがあります。
 > - CAN FD のままだと、画面に「**モーターが見つかりません**」と表示され、診断行が `REC128 ... RX0` のようになります。
 > - テスト後に元の機器へ戻す場合は、**CAN の設定も元に戻す**必要があります。
+>
+> 切り替えには、CANable 2.0 で使う GUI ツール [tools/dm_baud](tools/README.md) も使えます。
 
 ## ハードウェア
 
@@ -138,6 +140,8 @@ platformio.ini      ビルド設定 (M5Unified, M5Chain)
 include/config.h    ピン・パラメータ設定
 src/DmMotor.h/.cpp  DAMIAO モーターの CAN 通信 (ESP32 TWAI)
 src/main.cpp        画面表示・タッチ操作・制御の流れ
+tools/dm_baud/      CAN 速度切り替え GUI (CANable 2.0 + Python)
+tools/canable_fw/   CANable 2.0 ファームウェアのビルド・書き込みスクリプト
 ```
 
 ## 注意

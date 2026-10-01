@@ -1,3 +1,6 @@
 .pio/
 .vscode/
 .DS_Store
+.venv/
+__pycache__/
+tools/canable_fw/build/
